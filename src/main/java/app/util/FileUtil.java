@@ -104,4 +104,27 @@ public final class FileUtil {
     public static String readString(Path path) throws IOException {
         return Files.readString(path, CHARSET);
     }
+
+    /**
+     * Writes raw bytes to {@code path}, creating the file if absent and
+     * truncating it if present. Used for binary content such as blob objects.
+     *
+     * @param path    the file to write.
+     * @param content the bytes to write.
+     * @throws IOException if the file cannot be written.
+     */
+    public static void writeBytes(Path path, byte[] content) throws IOException {
+        Files.write(path, content);
+    }
+
+    /**
+     * Reads the entire contents of {@code path} as raw bytes.
+     *
+     * @param path the file to read.
+     * @return the file's contents.
+     * @throws IOException if the file does not exist or cannot be read.
+     */
+    public static byte[] readBytes(Path path) throws IOException {
+        return Files.readAllBytes(path);
+    }
 }

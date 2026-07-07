@@ -21,4 +21,14 @@ public final class DefaultStorageFactory implements StorageFactory {
     public JsonStorage createJsonStorage(Path metadataDir) {
         return new JsonStorage(metadataDir);
     }
+
+    @Override
+    public ObjectStorage createObjectStorage(Path metadataDir) {
+        return new ObjectStorage(metadataDir);
+    }
+
+    @Override
+    public IndexStorage createIndexStorage(Path metadataDir) {
+        return new IndexStorage(metadataDir);
+    }
 }

@@ -32,4 +32,16 @@ public interface StorageFactory {
      * @return a {@link JsonStorage} bound to {@code metadataDir}.
      */
     JsonStorage createJsonStorage(Path metadataDir);
+
+    /**
+     * @param metadataDir the {@code .gitlite} directory the storage will manage.
+     * @return an {@link ObjectStorage} bound to {@code metadataDir}.
+     */
+    ObjectStorage createObjectStorage(Path metadataDir);
+
+    /**
+     * @param metadataDir the {@code .gitlite} directory the storage will manage.
+     * @return an {@link IndexStorage} bound to {@code metadataDir}.
+     */
+    IndexStorage createIndexStorage(Path metadataDir);
 }
