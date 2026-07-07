@@ -31,4 +31,9 @@ public final class DefaultStorageFactory implements StorageFactory {
     public IndexStorage createIndexStorage(Path metadataDir) {
         return new IndexStorage(metadataDir);
     }
+
+    @Override
+    public CommitStorage createCommitStorage(Path metadataDir) {
+        return new CommitStorage(metadataDir);
+    }
 }

@@ -6,11 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import app.model.Blob;
+import app.model.FileSnapshot;
 
 /**
  * Unit tests for {@link HashService}: the content-addressing guarantees that the
@@ -57,5 +60,44 @@ class HashServiceTest {
     void blobStoresRawContent() {
         byte[] content = "Hello".getBytes(StandardCharsets.UTF_8);
         assertArrayEquals(content, hashService.createBlob(content).getContent());
+    }
+
+    // --- commit identity ---
+
+    private static final Instant WHEN = Instant.parse("2026-01-01T00:00:00Z");
+    private static final List<FileSnapshot> MANIFEST = List.of(new FileSnapshot("a.txt", "id1"));
+
+    @Test
+    @DisplayName("identical commit inputs always yield the same id")
+    void sameCommitInputsSameId() {
+        assertEquals(
+                hashService.createCommitId("msg", "author", WHEN, null, MANIFEST),
+                hashService.createCommitId("msg", "author", WHEN, null, MANIFEST));
+    }
+
+    @Test
+    @DisplayName("changing the parent changes the commit id")
+    void parentChangesCommitId() {
+        assertNotEquals(
+                hashService.createCommitId("msg", "author", WHEN, null, MANIFEST),
+                hashService.createCommitId("msg", "author", WHEN, "parent", MANIFEST));
+    }
+
+    @Test
+    @DisplayName("manifest ordering does not affect the commit id")
+    void manifestOrderDoesNotAffectCommitId() {
+        List<FileSnapshot> ordered = List.of(new FileSnapshot("a", "1"), new FileSnapshot("b", "2"));
+        List<FileSnapshot> reversed = List.of(new FileSnapshot("b", "2"), new FileSnapshot("a", "1"));
+        assertEquals(
+                hashService.createCommitId("msg", "author", WHEN, null, ordered),
+                hashService.createCommitId("msg", "author", WHEN, null, reversed));
+    }
+
+    @Test
+    @DisplayName("commit id is a 64-character lowercase hex SHA-256")
+    void commitIdIsSha256Hex() {
+        String id = hashService.createCommitId("msg", "author", WHEN, null, MANIFEST);
+        assertEquals(64, id.length());
+        assertTrue(id.matches("[0-9a-f]{64}"));
     }
 }

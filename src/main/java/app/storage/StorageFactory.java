@@ -44,4 +44,10 @@ public interface StorageFactory {
      * @return an {@link IndexStorage} bound to {@code metadataDir}.
      */
     IndexStorage createIndexStorage(Path metadataDir);
+
+    /**
+     * @param metadataDir the {@code .gitlite} directory the storage will manage.
+     * @return a {@link CommitStorage} bound to {@code metadataDir}.
+     */
+    CommitStorage createCommitStorage(Path metadataDir);
 }

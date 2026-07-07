@@ -26,12 +26,6 @@ public final class RepositoryService {
 
     private static final Logger LOGGER = Logger.getLogger(RepositoryService.class.getName());
 
-    /**
-     * Prefix of the git-style symbolic ref written to {@code HEAD}. Combined with
-     * a branch name it yields, for example, {@code "ref: refs/heads/master"}.
-     */
-    private static final String HEAD_REF_PREFIX = "ref: refs/heads/";
-
     private final StorageFactory storageFactory;
 
     /**
@@ -90,7 +84,7 @@ public final class RepositoryService {
         // that does not yet exist.
         fileStorage.createSkeleton();
         fileStorage.createIndex();
-        fileStorage.writeHead(HEAD_REF_PREFIX + defaultBranch);
+        fileStorage.writeHead(BranchService.toHeadRef(defaultBranch));
 
         RepositoryConfig config = new RepositoryConfig(
                 defaultBranch, repository.getCreatedAt(), userName);
