@@ -3,6 +3,7 @@ package app.storage;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Optional;
 
 import app.util.FileUtil;
 
@@ -119,5 +120,60 @@ public final class FileStorage {
         } catch (IOException e) {
             throw new StorageException("Failed to read HEAD at " + head, e);
         }
+    }
+
+    /**
+     * Writes a branch's tip commit id to {@code branches/<branch>}, creating the
+     * file (and any parent directories, so nested names like {@code feature/x}
+     * work) or overwriting an existing tip. This is the operation that <em>births</em>
+     * a previously unborn branch on its first commit.
+     *
+     * @param branchName the branch name.
+     * @param commitId   the id of the commit the branch now points at.
+     * @throws StorageException if the branch tip cannot be written.
+     */
+    public void writeBranchTip(String branchName, String commitId) {
+        Path branch = branchPath(branchName);
+        try {
+            FileUtil.ensureDirectory(branch.getParent());
+            FileUtil.writeString(branch, commitId);
+        } catch (IOException e) {
+            throw new StorageException("Failed to write branch tip at " + branch, e);
+        }
+    }
+
+    /**
+     * Reads a branch's tip commit id.
+     *
+     * @param branchName the branch name.
+     * @return the tip commit id, or an empty optional if the branch has no file
+     *         yet (an unborn branch).
+     * @throws StorageException if the branch file exists but cannot be read.
+     */
+    public Optional<String> readBranchTip(String branchName) {
+        Path branch = branchPath(branchName);
+        if (!FileUtil.exists(branch)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(FileUtil.readString(branch).strip());
+        } catch (IOException e) {
+            throw new StorageException("Failed to read branch tip at " + branch, e);
+        }
+    }
+
+    /**
+     * @param branchName the branch name.
+     * @return {@code true} if the branch has a tip file (it is born).
+     */
+    public boolean branchExists(String branchName) {
+        return FileUtil.exists(branchPath(branchName));
+    }
+
+    private Path branchPath(String branchName) {
+        if (branchName == null || branchName.isBlank()) {
+            throw new IllegalArgumentException("branch name is required and must not be blank");
+        }
+        return metadataDir.resolve(BRANCHES_DIR).resolve(branchName);
     }
 }
