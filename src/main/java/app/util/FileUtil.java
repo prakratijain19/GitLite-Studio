@@ -5,6 +5,8 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * Thin, stateless wrapper over {@link java.nio.file.Files} providing the small
@@ -126,5 +128,24 @@ public final class FileUtil {
      */
     public static byte[] readBytes(Path path) throws IOException {
         return Files.readAllBytes(path);
+    }
+
+    /**
+     * Recursively lists every regular file under {@code root} (directories and
+     * symbolic-link targets are not included). The returned paths are as produced
+     * by the walk, rooted at {@code root}.
+     *
+     * <p>This method is intentionally generic: it applies no filtering. Callers
+     * that need to exclude specific locations (such as the {@code .gitlite}
+     * metadata directory) are responsible for doing so.
+     *
+     * @param root the directory to walk.
+     * @return the regular files found beneath {@code root}.
+     * @throws IOException if the tree cannot be walked.
+     */
+    public static List<Path> listRegularFiles(Path root) throws IOException {
+        try (Stream<Path> walk = Files.walk(root)) {
+            return walk.filter(Files::isRegularFile).toList();
+        }
     }
 }
