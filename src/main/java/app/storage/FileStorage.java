@@ -2,6 +2,7 @@ package app.storage;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -168,6 +169,42 @@ public final class FileStorage {
      */
     public boolean branchExists(String branchName) {
         return FileUtil.exists(branchPath(branchName));
+    }
+
+    /**
+     * Lists the names of all branches (born branches, i.e. those with a tip file)
+     * under {@code branches/}, sorted. Nested names such as {@code feature/x} are
+     * returned with forward slashes.
+     *
+     * @return the sorted branch names.
+     * @throws StorageException if the branches directory cannot be listed.
+     */
+    public List<String> listBranchNames() {
+        Path branchesDir = metadataDir.resolve(BRANCHES_DIR);
+        try {
+            return FileUtil.listRegularFiles(branchesDir).stream()
+                    .map(file -> branchesDir.relativize(file).toString().replace('\\', '/'))
+                    .sorted()
+                    .toList();
+        } catch (IOException e) {
+            throw new StorageException("Failed to list branches in " + branchesDir, e);
+        }
+    }
+
+    /**
+     * Deletes a branch's tip file.
+     *
+     * @param branchName the branch to delete.
+     * @throws StorageException if the branch file cannot be deleted (for example
+     *                          it does not exist).
+     */
+    public void deleteBranch(String branchName) {
+        Path branch = branchPath(branchName);
+        try {
+            FileUtil.delete(branch);
+        } catch (IOException e) {
+            throw new StorageException("Failed to delete branch at " + branch, e);
+        }
     }
 
     private Path branchPath(String branchName) {

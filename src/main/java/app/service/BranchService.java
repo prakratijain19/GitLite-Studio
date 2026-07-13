@@ -1,11 +1,15 @@
 package app.service;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
+import app.model.Branch;
 import app.model.Repository;
 import app.storage.DefaultStorageFactory;
 import app.storage.FileStorage;
+import app.storage.StorageException;
 import app.storage.StorageFactory;
 
 /**
@@ -105,6 +109,71 @@ public final class BranchService {
      */
     public void advanceTip(Repository repository, String branchName, String commitId) {
         fileStorage(repository).writeBranchTip(branchName, commitId);
+    }
+
+    /**
+     * Creates a new branch pointing at the current commit.
+     *
+     * @param repository the repository to update.
+     * @param branchName the name of the new branch (non-blank).
+     * @return the created {@link Branch}.
+     * @throws IllegalArgumentException if the name is blank or a branch of that
+     *                                  name already exists.
+     * @throws IllegalStateException    if the repository has no commit yet, so
+     *                                  there is nothing for the branch to point at.
+     */
+    public Branch createBranch(Repository repository, String branchName) {
+        if (branchName == null || branchName.isBlank()) {
+            throw new IllegalArgumentException("branch name must not be null or blank");
+        }
+        FileStorage fileStorage = fileStorage(repository);
+        if (fileStorage.branchExists(branchName)) {
+            throw new IllegalArgumentException("Branch already exists: " + branchName);
+        }
+        String tip = currentTip(repository).orElseThrow(() ->
+                new IllegalStateException("Cannot create a branch before the first commit"));
+        fileStorage.writeBranchTip(branchName, tip);
+        return Branch.at(branchName, tip);
+    }
+
+    /**
+     * Lists all born branches (those with a tip), each as a {@link Branch} with
+     * its name and tip commit id.
+     *
+     * @param repository the repository to inspect.
+     * @return the branches, sorted by name.
+     */
+    public List<Branch> listBranches(Repository repository) {
+        FileStorage fileStorage = fileStorage(repository);
+        List<Branch> branches = new ArrayList<>();
+        for (String name : fileStorage.listBranchNames()) {
+            String tip = fileStorage.readBranchTip(name).orElseThrow(() ->
+                    new StorageException("Branch listed but has no tip: " + name));
+            branches.add(Branch.at(name, tip));
+        }
+        return List.copyOf(branches);
+    }
+
+    /**
+     * Deletes a branch.
+     *
+     * @param repository the repository to update.
+     * @param branchName the branch to delete.
+     * @throws IllegalArgumentException if the name is blank or no such branch exists.
+     * @throws IllegalStateException    if the branch is the one {@code HEAD} points at.
+     */
+    public void deleteBranch(Repository repository, String branchName) {
+        if (branchName == null || branchName.isBlank()) {
+            throw new IllegalArgumentException("branch name must not be null or blank");
+        }
+        if (branchName.equals(currentBranch(repository))) {
+            throw new IllegalStateException("Cannot delete the current branch: " + branchName);
+        }
+        FileStorage fileStorage = fileStorage(repository);
+        if (!fileStorage.branchExists(branchName)) {
+            throw new IllegalArgumentException("Branch not found: " + branchName);
+        }
+        fileStorage.deleteBranch(branchName);
     }
 
     private FileStorage fileStorage(Repository repository) {

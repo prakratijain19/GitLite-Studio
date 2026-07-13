@@ -148,4 +148,16 @@ public final class FileUtil {
             return walk.filter(Files::isRegularFile).toList();
         }
     }
+
+    /**
+     * Deletes the file at {@code path}. Fails if it does not exist, so callers
+     * that treat a missing file as an error surface it rather than silently
+     * succeeding.
+     *
+     * @param path the file to delete.
+     * @throws IOException if the file does not exist or cannot be deleted.
+     */
+    public static void delete(Path path) throws IOException {
+        Files.delete(path);
+    }
 }
