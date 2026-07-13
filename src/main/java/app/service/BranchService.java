@@ -78,6 +78,18 @@ public final class BranchService {
     }
 
     /**
+     * Points {@code HEAD} at the given branch, making it the current branch. This
+     * updates only the symbolic ref; it does not touch the working tree or index.
+     *
+     * @param repository the repository to update.
+     * @param branchName the branch {@code HEAD} should point at.
+     */
+    public void setCurrentBranch(Repository repository, String branchName) {
+        Objects.requireNonNull(branchName, "branchName must not be null");
+        fileStorage(repository).writeHead(toHeadRef(branchName));
+    }
+
+    /**
      * Reads the tip commit id of the given branch.
      *
      * @param repository the repository to inspect.
