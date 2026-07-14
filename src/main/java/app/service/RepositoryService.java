@@ -96,6 +96,46 @@ public final class RepositoryService {
         return repository;
     }
 
+    /**
+     * @param rootPath the project folder to test.
+     * @return {@code true} if {@code rootPath} contains an initialized GitLite
+     *         repository.
+     */
+    public boolean isRepository(Path rootPath) {
+        Objects.requireNonNull(rootPath, "rootPath must not be null");
+        return storageFactory.createFileStorage(metadataDir(rootPath)).isInitialized();
+    }
+
+    /**
+     * Opens an existing repository at {@code rootPath}, reconstructing its
+     * in-memory {@link Repository} from the stored {@code config}.
+     *
+     * @param rootPath the project folder containing {@code .gitlite}.
+     * @return the loaded {@link Repository}.
+     * @throws IllegalArgumentException if {@code rootPath} is not an initialized
+     *                                  repository.
+     * @throws app.storage.StorageException if the config cannot be read.
+     */
+    public Repository open(Path rootPath) {
+        Objects.requireNonNull(rootPath, "rootPath must not be null");
+        Path metadataDir = metadataDir(rootPath);
+        FileStorage fileStorage = storageFactory.createFileStorage(metadataDir);
+        if (!fileStorage.isInitialized()) {
+            throw new IllegalArgumentException("Not a GitLite repository: " + rootPath);
+        }
+        RepositoryConfig config = storageFactory.createJsonStorage(metadataDir).readConfig();
+        return Repository.builder()
+                .rootPath(rootPath)
+                .defaultBranch(config.defaultBranch())
+                .userName(config.userName())
+                .createdAt(config.createdAt())
+                .build();
+    }
+
+    private static Path metadataDir(Path rootPath) {
+        return rootPath.resolve(Repository.METADATA_DIR_NAME);
+    }
+
     private static void validate(Path rootPath, String userName, String defaultBranch) {
         if (rootPath == null) {
             throw new IllegalArgumentException("rootPath must not be null");

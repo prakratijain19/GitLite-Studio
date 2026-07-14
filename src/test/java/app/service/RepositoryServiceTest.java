@@ -1,6 +1,7 @@
 package app.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -127,5 +128,30 @@ class RepositoryServiceTest {
     void initializeRejectsNullRoot() {
         assertThrows(IllegalArgumentException.class,
                 () -> service.initialize(null, USER, BRANCH));
+    }
+
+    @Test
+    @DisplayName("isRepository() distinguishes an initialized directory from a plain one")
+    void isRepositoryDetectsInitialized(@TempDir Path root, @TempDir Path plain) {
+        service.initialize(root, USER, BRANCH);
+        assertTrue(service.isRepository(root));
+        assertFalse(service.isRepository(plain));
+    }
+
+    @Test
+    @DisplayName("open() reconstructs the repository from stored config")
+    void openReconstructsRepository(@TempDir Path root) {
+        service.initialize(root, USER, BRANCH);
+
+        Repository opened = service.open(root);
+        assertEquals(root, opened.getRootPath());
+        assertEquals(USER, opened.getUserName());
+        assertEquals(BRANCH, opened.getDefaultBranch());
+    }
+
+    @Test
+    @DisplayName("open() rejects a directory that is not a repository")
+    void openRejectsNonRepository(@TempDir Path plain) {
+        assertThrows(IllegalArgumentException.class, () -> service.open(plain));
     }
 }
