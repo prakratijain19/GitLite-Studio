@@ -1,6 +1,7 @@
 package app.controller;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Optional;
 
@@ -11,12 +12,16 @@ import app.service.RepositoryService;
 import app.service.StatusService;
 
 import javafx.fxml.FXML;
+import javafx.fxml.FXMLLoader;
+import javafx.scene.Parent;
+import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.VBox;
 import javafx.stage.DirectoryChooser;
+import javafx.stage.Stage;
 import javafx.stage.Window;
 
 /**
@@ -91,6 +96,29 @@ public final class HomeController {
     @FXML
     private void onRefresh() {
         render();
+    }
+
+    @FXML
+    private void onOpenCommitView() {
+        if (repository == null) {
+            showError("No repository", "Open or initialize a repository first.");
+            return;
+        }
+        try {
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("/app/view/commit.fxml"));
+            Parent view = loader.load();
+            CommitController controller = loader.getController();
+            controller.setRepository(repository);
+
+            Stage stage = new Stage();
+            stage.setTitle("Commit — " + repository.getRootPath().getFileName());
+            stage.setScene(new Scene(view, 640, 480));
+            stage.initOwner(window());
+            stage.setOnHidden(event -> render()); // reflect new commit in Home status
+            stage.show();
+        } catch (IOException e) {
+            showError("Failed to open commit view", e.getMessage());
+        }
     }
 
     private void render() {
