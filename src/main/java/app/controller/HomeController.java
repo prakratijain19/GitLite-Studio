@@ -121,6 +121,105 @@ public final class HomeController {
         }
     }
 
+    @FXML
+    private void onOpenHistoryView() {
+        if (repository == null) {
+            showError("No repository", "Open or initialize a repository first.");
+            return;
+        }
+        try {
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("/app/view/history.fxml"));
+            Parent view = loader.load();
+            HistoryController controller = loader.getController();
+            controller.setRepository(repository);
+
+            Stage stage = new Stage();
+            stage.setTitle("History — " + repository.getRootPath().getFileName());
+            stage.setScene(new Scene(view, 750, 480));
+            stage.initOwner(window());
+            stage.show();
+        } catch (IOException e) {
+            showError("Failed to open history view", e.getMessage());
+        }
+    }
+
+    @FXML
+    private void onOpenBranchView() {
+        if (repository == null) {
+            showError("No repository", "Open or initialize a repository first.");
+            return;
+        }
+        try {
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("/app/view/branch.fxml"));
+            Parent view = loader.load();
+            BranchController controller = loader.getController();
+            controller.setRepository(repository);
+
+            Stage stage = new Stage();
+            stage.setTitle("Branches — " + repository.getRootPath().getFileName());
+            stage.setScene(new Scene(view, 400, 400));
+            stage.initOwner(window());
+            stage.setOnHidden(event -> render()); // refresh branch label on close
+            stage.show();
+        } catch (IOException e) {
+            showError("Failed to open branch view", e.getMessage());
+        }
+    }
+
+    @FXML
+    private void onOpenDiffView() {
+        if (repository == null) {
+            showError("No repository", "Open or initialize a repository first.");
+            return;
+        }
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setTitle("Diff Viewer");
+        dialog.setHeaderText("Enter relative path of file to diff:");
+        dialog.setContentText("Path:");
+        dialog.showAndWait().ifPresent(path -> {
+            try {
+                Path file = repository.getRootPath().resolve(path);
+                byte[] content = java.nio.file.Files.exists(file) ? java.nio.file.Files.readAllBytes(file) : new byte[0];
+                
+                FXMLLoader loader = new FXMLLoader(getClass().getResource("/app/view/diff.fxml"));
+                Parent view = loader.load();
+                DiffController controller = loader.getController();
+                controller.setFileToDiff(repository, path, null, content); // basic diff vs empty for now
+
+                Stage stage = new Stage();
+                stage.setTitle("Diff — " + path);
+                stage.setScene(new Scene(view, 600, 480));
+                stage.initOwner(window());
+                stage.show();
+            } catch (IOException e) {
+                showError("Failed to open diff view", e.getMessage());
+            }
+        });
+    }
+
+    @FXML
+    private void onOpenMergeView() {
+        if (repository == null) {
+            showError("No repository", "Open or initialize a repository first.");
+            return;
+        }
+        try {
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("/app/view/merge.fxml"));
+            Parent view = loader.load();
+            MergeController controller = loader.getController();
+            controller.setRepository(repository);
+
+            Stage stage = new Stage();
+            stage.setTitle("Merge — " + repository.getRootPath().getFileName());
+            stage.setScene(new Scene(view, 400, 400));
+            stage.initOwner(window());
+            stage.setOnHidden(event -> render());
+            stage.show();
+        } catch (IOException e) {
+            showError("Failed to open merge view", e.getMessage());
+        }
+    }
+
     private void render() {
         if (repository == null) {
             pathLabel.setText("(none)");

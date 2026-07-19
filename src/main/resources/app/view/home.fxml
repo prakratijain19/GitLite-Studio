@@ -23,6 +23,10 @@
         <Button text="Open Repository…" onAction="#onOpenRepository"/>
         <Button text="Initialize Repository…" onAction="#onInitRepository"/>
         <Button text="Commit…" onAction="#onOpenCommitView"/>
+        <Button text="History…" onAction="#onOpenHistoryView"/>
+        <Button text="Branch…" onAction="#onOpenBranchView"/>
+        <Button text="Diff…" onAction="#onOpenDiffView"/>
+        <Button text="Merge…" onAction="#onOpenMergeView"/>
         <Button text="Refresh" onAction="#onRefresh"/>
     </HBox>
 
