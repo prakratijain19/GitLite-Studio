@@ -22,6 +22,7 @@
     <HBox spacing="8.0">
         <Button text="Open Repository…" onAction="#onOpenRepository"/>
         <Button text="Initialize Repository…" onAction="#onInitRepository"/>
+        <Button text="Commit…" onAction="#onOpenCommitView"/>
         <Button text="Refresh" onAction="#onRefresh"/>
     </HBox>
 
