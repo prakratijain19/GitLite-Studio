@@ -1,10 +1,12 @@
 package app.service;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
 
 import app.model.Commit;
@@ -15,116 +17,66 @@ import app.storage.StorageException;
 import app.storage.StorageFactory;
 
 /**
- * Reads commit history by walking the parent chain — the equivalent of
- * {@code git log}.
- *
- * <p>Starting from the tip of the branch {@code HEAD} points at, the service
- * emits each commit and follows its parent link until it reaches the root commit
- * (the one with no parent). The result is ordered newest first. This is a
- * read-only query: it never modifies the repository.
- *
- * <p>It also provides ancestry queries used by merge operations: determining
- * whether one commit is an ancestor of another is the basis for fast-forward
- * detection.
- *
- * <p>It is application-scoped and obtains repository-scoped storage through an
- * injected {@link StorageFactory}, from which it also builds the
- * {@link BranchService} used to resolve the current tip.
+ * Queries the commit history of a repository.
  */
 public final class HistoryService {
 
     private final StorageFactory storageFactory;
     private final BranchService branchService;
 
-    /** Creates a service wired with the default storage factory. */
     public HistoryService() {
         this(new DefaultStorageFactory());
     }
 
-    /**
-     * Creates a service with an explicit storage factory. Intended for tests.
-     *
-     * @param storageFactory the factory used to obtain repository-scoped storage.
-     */
     public HistoryService(StorageFactory storageFactory) {
         this.storageFactory = Objects.requireNonNull(storageFactory, "storageFactory must not be null");
         this.branchService = new BranchService(storageFactory);
     }
 
     /**
-     * Returns the history of the current branch, newest commit first.
-     *
-     * @param repository the repository to read.
-     * @return the commits from the current branch tip back to the root, ordered
-     *         newest to oldest; empty if the branch is unborn (no commits yet).
-     * @throws StorageException if a commit referenced as a parent cannot be found.
+     * Returns the commit history of the current branch, most recent first.
+     * Follows only first parents (like git log --first-parent).
      */
     public List<Commit> history(Repository repository) {
         Objects.requireNonNull(repository, "repository must not be null");
-
-        Optional<String> tip = branchService.currentTip(repository);
-        if (tip.isEmpty()) {
+        String tipId = branchService.currentTip(repository).orElse(null);
+        if (tipId == null) {
             return List.of();
         }
-
-        return historyFrom(repository, tip.get());
+        return historyFrom(repository, tipId);
     }
 
     /**
-     * Returns the history starting from the given commit, newest first.
-     *
-     * <p>This method walks the parent chain from {@code startId} back to the
-     * root commit, emitting each commit along the way. It is used by
-     * {@link #history(Repository)} as well as by other services (for example
-     * merge operations) that need the history of a specific branch tip.
-     *
-     * @param repository the repository to read.
-     * @param startId    the commit to start from (non-blank).
-     * @return the commits from {@code startId} back to the root, ordered newest
-     *         to oldest.
-     * @throws StorageException if a commit referenced as a parent cannot be found.
+     * Returns the commit history starting from the given commit id, most recent first.
+     * Follows only first parents. Includes cycle detection.
      */
-    public List<Commit> historyFrom(Repository repository, String startId) {
+    public List<Commit> historyFrom(Repository repository, String startCommitId) {
         Objects.requireNonNull(repository, "repository must not be null");
-        if (startId == null || startId.isBlank()) {
-            throw new IllegalArgumentException("startId must not be null or blank");
+        if (startCommitId == null || startCommitId.isBlank()) {
+            throw new IllegalArgumentException("startCommitId must not be null or blank");
         }
 
         CommitStorage commitStorage = storageFactory.createCommitStorage(repository.getMetadataPath());
-        List<Commit> history = new ArrayList<>();
+        List<Commit> commits = new ArrayList<>();
         Set<String> visited = new HashSet<>();
-        String currentId = startId;
+        String currentId = startCommitId;
+
         while (currentId != null) {
             if (!visited.add(currentId)) {
-                throw new StorageException("Cycle detected in commit history at: " + currentId);
+                break; // cycle detected
             }
             final String lookup = currentId;
             Commit commit = commitStorage.readCommit(lookup)
                     .orElseThrow(() -> new StorageException("Commit not found: " + lookup));
-            history.add(commit);
+            commits.add(commit);
             currentId = commit.parentId();
         }
-        return List.copyOf(history);
+        return commits;
     }
 
     /**
-     * Determines whether {@code ancestorId} is an ancestor of
-     * {@code descendantId} — that is, whether walking the parent chain from
-     * {@code descendantId} eventually reaches {@code ancestorId}.
-     *
-     * <p>This is the key test for fast-forward merge eligibility: if the
-     * current branch tip is an ancestor of the target branch tip, the merge
-     * can be performed by simply advancing the branch pointer.
-     *
-     * <p>If both ids are equal, this returns {@code true} (a commit is
-     * considered its own ancestor).
-     *
-     * @param repository   the repository to inspect.
-     * @param ancestorId   the commit id suspected to be an ancestor (non-blank).
-     * @param descendantId the commit id to walk backwards from (non-blank).
-     * @return {@code true} if {@code ancestorId} is reachable by walking the
-     *         parent chain from {@code descendantId}.
-     * @throws StorageException if a commit in the chain cannot be found.
+     * Checks whether {@code ancestorId} is reachable from {@code descendantId}
+     * by walking the parent chain backwards (BFS, follows both parents of merge commits).
      */
     public boolean isAncestor(Repository repository, String ancestorId, String descendantId) {
         Objects.requireNonNull(repository, "repository must not be null");
@@ -141,19 +93,89 @@ public final class HistoryService {
 
         CommitStorage commitStorage = storageFactory.createCommitStorage(repository.getMetadataPath());
         Set<String> visited = new HashSet<>();
-        String currentId = descendantId;
-        while (currentId != null) {
+        Queue<String> queue = new ArrayDeque<>();
+        queue.add(descendantId);
+        while (!queue.isEmpty()) {
+            String currentId = queue.poll();
             if (currentId.equals(ancestorId)) {
                 return true;
             }
             if (!visited.add(currentId)) {
-                return false; // cycle — ancestor not found
+                continue;
             }
             final String lookup = currentId;
             Commit commit = commitStorage.readCommit(lookup)
                     .orElseThrow(() -> new StorageException("Commit not found: " + lookup));
-            currentId = commit.parentId();
+            for (String pid : commit.parents()) {
+                if (!visited.contains(pid)) {
+                    queue.add(pid);
+                }
+            }
         }
         return false;
+    }
+
+    /**
+     * Finds the merge base (most recent common ancestor) of two commits.
+     */
+    public Optional<String> findMergeBase(Repository repository,
+                                           String commitIdA, String commitIdB) {
+        Objects.requireNonNull(repository, "repository must not be null");
+        if (commitIdA == null || commitIdA.isBlank()) {
+            throw new IllegalArgumentException("commitIdA must not be null or blank");
+        }
+        if (commitIdB == null || commitIdB.isBlank()) {
+            throw new IllegalArgumentException("commitIdB must not be null or blank");
+        }
+
+        if (commitIdA.equals(commitIdB)) {
+            return Optional.of(commitIdA);
+        }
+
+        CommitStorage commitStorage = storageFactory.createCommitStorage(repository.getMetadataPath());
+        Set<String> ancestorsOfA = collectAncestors(commitStorage, commitIdA);
+
+        Set<String> visited = new HashSet<>();
+        Queue<String> queue = new ArrayDeque<>();
+        queue.add(commitIdB);
+        while (!queue.isEmpty()) {
+            String currentId = queue.poll();
+            if (ancestorsOfA.contains(currentId)) {
+                return Optional.of(currentId);
+            }
+            if (!visited.add(currentId)) {
+                continue;
+            }
+            final String lookup = currentId;
+            Commit commit = commitStorage.readCommit(lookup)
+                    .orElseThrow(() -> new StorageException("Commit not found: " + lookup));
+            for (String pid : commit.parents()) {
+                if (!visited.contains(pid)) {
+                    queue.add(pid);
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static Set<String> collectAncestors(CommitStorage commitStorage, String startId) {
+        Set<String> ancestors = new HashSet<>();
+        Queue<String> queue = new ArrayDeque<>();
+        queue.add(startId);
+        while (!queue.isEmpty()) {
+            String currentId = queue.poll();
+            if (!ancestors.add(currentId)) {
+                continue;
+            }
+            final String lookup = currentId;
+            Commit commit = commitStorage.readCommit(lookup)
+                    .orElseThrow(() -> new StorageException("Commit not found: " + lookup));
+            for (String pid : commit.parents()) {
+                if (!ancestors.contains(pid)) {
+                    queue.add(pid);
+                }
+            }
+        }
+        return ancestors;
     }
 }

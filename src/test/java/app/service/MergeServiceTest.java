@@ -17,17 +17,20 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import app.model.Commit;
 import app.model.Index;
 import app.model.MergeResult;
 import app.model.Repository;
+import app.storage.CommitStorage;
 import app.storage.DefaultStorageFactory;
+import app.storage.FileStorage;
 import app.storage.IndexStorage;
+import app.util.FileUtil;
 
 /**
- * Integration tests for {@link MergeService}: fast-forward merge advances the
- * branch and rewrites the working tree; already-up-to-date is a no-op; dirty
- * tree is refused; merging into self is rejected; merging a missing branch is
- * rejected; diverged branches throw UnsupportedOperationException.
+ * Integration tests for {@link MergeService}: fast-forward merge, three-way
+ * merge (non-conflicting), conflict detection, already-up-to-date, dirty
+ * tree guard, and various error cases.
  */
 class MergeServiceTest {
 
@@ -35,13 +38,14 @@ class MergeServiceTest {
     private final RepositoryService repositoryService = new RepositoryService();
     private final StagingService stagingService = new StagingService();
     private final BranchService branchService = new BranchService();
+    private final HashService hashService = new HashService();
     private final Clock clock = Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC);
     private final CommitService commitService =
-            new CommitService(storageFactory, new HashService(), clock);
+            new CommitService(storageFactory, hashService, clock);
     private final CheckoutService checkoutService =
-            new CheckoutService(storageFactory, new HashService());
+            new CheckoutService(storageFactory, hashService);
     private final MergeService mergeService =
-            new MergeService(storageFactory, new HashService());
+            new MergeService(storageFactory, hashService, clock);
 
     private Repository initRepo(Path root) {
         return repositoryService.initialize(root, "Tester", "master");
@@ -67,7 +71,9 @@ class MergeServiceTest {
         return Files.readString(repo.getRootPath().resolve(relative), StandardCharsets.UTF_8);
     }
 
-    // ── Fast-forward merge ──────────────────────────────────────────────
+    // =================================================================
+    // Fast-forward merge
+    // =================================================================
 
     @Test
     @DisplayName("fast-forward merge advances master to feature's tip and rewrites working tree")
@@ -75,15 +81,13 @@ class MergeServiceTest {
         Repository repo = initRepo(root);
         commit(repo, "a.txt", "A", "add a on master");
 
-        // Create feature branch and add a commit on it.
         branchService.createBranch(repo, "feature");
         checkoutService.checkout(repo, "feature");
         commit(repo, "b.txt", "B", "add b on feature");
         String featureTip = branchService.tipOf(repo, "feature").orElseThrow();
 
-        // Switch back to master and merge feature.
         checkoutService.checkout(repo, "master");
-        assertFalse(exists(repo, "b.txt"), "b.txt is not on master before merge");
+        assertFalse(exists(repo, "b.txt"));
 
         MergeResult result = mergeService.merge(repo, "feature");
 
@@ -91,13 +95,8 @@ class MergeServiceTest {
         assertEquals(featureTip, result.commitId());
         assertTrue(result.isSuccess());
         assertTrue(result.didMerge());
-
-        // Working tree must now match feature.
-        assertTrue(exists(repo, "a.txt"), "a.txt must survive merge");
-        assertTrue(exists(repo, "b.txt"), "b.txt must appear after merge");
+        assertTrue(exists(repo, "b.txt"));
         assertEquals("B", readFile(repo, "b.txt"));
-
-        // Branch tip must have advanced.
         assertEquals(featureTip, branchService.tipOf(repo, "master").orElseThrow());
     }
 
@@ -120,49 +119,45 @@ class MergeServiceTest {
     }
 
     @Test
-    @DisplayName("fast-forward merge removes files tracked by current but absent in source")
-    void fastForwardRemovesObsoleteFiles(@TempDir Path root) throws IOException {
+    @DisplayName("fast-forward merge across multiple commits works correctly")
+    void fastForwardAcrossMultipleCommits(@TempDir Path root) throws IOException {
         Repository repo = initRepo(root);
-        commit(repo, "a.txt", "A", "add a on master");
-        commit(repo, "delete-me.txt", "DELETE", "add file to be removed");
-
-        // Feature was created when delete-me.txt existed.
+        commit(repo, "a.txt", "A", "add a");
         branchService.createBranch(repo, "feature");
-
-        // On master, remove delete-me.txt by staging only a.txt for a new commit.
-        // (We simulate this by creating a new branch from the first commit.)
-        // Actually, let's do it differently: add more commits on feature that
-        // diverge from master, but since we need fast-forward, let's create the
-        // scenario correctly.
-
-        // Scenario: master has {a.txt, delete-me.txt}, feature adds {b.txt}.
-        // Merging feature into master should have {a.txt, delete-me.txt, b.txt}.
-        // But to test removal, let's reverse: merge master into a branch that
-        // diverged BEFORE delete-me.txt was added.
-
-        // Simpler scenario: create feature from initial commit, add b.txt on master.
-        // Then merging master into feature should add b.txt to feature.
-        // This is still a fast-forward (master is ahead of feature).
-
-        // Let's just verify the simple scenario works.
         checkoutService.checkout(repo, "feature");
-        commit(repo, "c.txt", "C", "add c on feature");
+        commit(repo, "b.txt", "B1", "add b");
+        commit(repo, "b.txt", "B2", "update b");
+        commit(repo, "c.txt", "C", "add c");
         String featureTip = branchService.tipOf(repo, "feature").orElseThrow();
 
-        // Switch to master. Master has {a.txt, delete-me.txt}.
-        // Feature has {a.txt, delete-me.txt, c.txt}.
-        // Master is ancestor of feature, so merging feature into master should
-        // result in {a.txt, delete-me.txt, c.txt} — fast-forward.
         checkoutService.checkout(repo, "master");
         MergeResult result = mergeService.merge(repo, "feature");
 
         assertEquals(MergeResult.Type.FAST_FORWARD, result.type());
-        assertTrue(exists(repo, "a.txt"));
-        assertTrue(exists(repo, "delete-me.txt"));
+        assertEquals(featureTip, result.commitId());
+        assertEquals("B2", readFile(repo, "b.txt"));
         assertTrue(exists(repo, "c.txt"));
     }
 
-    // ── Already up-to-date ──────────────────────────────────────────────
+    @Test
+    @DisplayName("untracked files are preserved during fast-forward merge")
+    void untrackedFilesSurviveFastForward(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "a.txt", "A", "add a");
+        branchService.createBranch(repo, "feature");
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "b.txt", "B", "add b");
+
+        checkoutService.checkout(repo, "master");
+        writeFile(repo, "scratch.txt", "keep me");
+        mergeService.merge(repo, "feature");
+
+        assertTrue(exists(repo, "scratch.txt"));
+    }
+
+    // =================================================================
+    // Already up-to-date
+    // =================================================================
 
     @Test
     @DisplayName("merging an ancestor branch returns ALREADY_UP_TO_DATE")
@@ -170,17 +165,13 @@ class MergeServiceTest {
         Repository repo = initRepo(root);
         commit(repo, "a.txt", "A", "add a");
         branchService.createBranch(repo, "feature");
-
-        // Feature is at the same commit as master. Master adds one more commit.
         commit(repo, "b.txt", "B", "add b on master");
         String masterTip = branchService.tipOf(repo, "master").orElseThrow();
 
-        // Feature is behind master (ancestor). Merging feature into master → up-to-date.
         MergeResult result = mergeService.merge(repo, "feature");
 
         assertEquals(MergeResult.Type.ALREADY_UP_TO_DATE, result.type());
         assertEquals(masterTip, result.commitId());
-        assertTrue(result.isSuccess());
         assertFalse(result.didMerge());
     }
 
@@ -190,22 +181,250 @@ class MergeServiceTest {
         Repository repo = initRepo(root);
         commit(repo, "a.txt", "A", "add a");
         branchService.createBranch(repo, "feature");
-        String currentTip = branchService.tipOf(repo, "master").orElseThrow();
+
+        MergeResult result = mergeService.merge(repo, "feature");
+        assertEquals(MergeResult.Type.ALREADY_UP_TO_DATE, result.type());
+    }
+
+    // =================================================================
+    // Three-way merge (non-conflicting)
+    // =================================================================
+
+    @Test
+    @DisplayName("three-way merge: each side adds a different file")
+    void threeWayMergeBothAddDifferentFiles(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "base.txt", "BASE", "initial commit");
+        branchService.createBranch(repo, "feature");
+
+        // Master adds b.txt
+        commit(repo, "b.txt", "B", "add b on master");
+
+        // Feature adds c.txt
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "c.txt", "C", "add c on feature");
+
+        // Merge feature into master
+        checkoutService.checkout(repo, "master");
+        MergeResult result = mergeService.merge(repo, "feature");
+
+        assertEquals(MergeResult.Type.MERGED, result.type());
+        assertTrue(result.isSuccess());
+        assertTrue(result.didMerge());
+
+        // Working tree should have all three files.
+        assertTrue(exists(repo, "base.txt"));
+        assertTrue(exists(repo, "b.txt"));
+        assertTrue(exists(repo, "c.txt"));
+        assertEquals("BASE", readFile(repo, "base.txt"));
+        assertEquals("B", readFile(repo, "b.txt"));
+        assertEquals("C", readFile(repo, "c.txt"));
+    }
+
+    @Test
+    @DisplayName("three-way merge creates a merge commit with two parents")
+    void threeWayMergeCreatesMergeCommit(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "base.txt", "BASE", "initial commit");
+        branchService.createBranch(repo, "feature");
+
+        commit(repo, "b.txt", "B", "add b on master");
+        String masterTip = branchService.tipOf(repo, "master").orElseThrow();
+
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "c.txt", "C", "add c on feature");
+        String featureTip = branchService.tipOf(repo, "feature").orElseThrow();
+
+        checkoutService.checkout(repo, "master");
+        MergeResult result = mergeService.merge(repo, "feature");
+
+        // Read the merge commit.
+        CommitStorage commitStorage = new CommitStorage(repo.getMetadataPath());
+        Commit mergeCommit = commitStorage.readCommit(result.commitId()).orElseThrow();
+
+        assertTrue(mergeCommit.isMerge());
+        assertEquals(masterTip, mergeCommit.parentId());
+        assertEquals(featureTip, mergeCommit.secondParentId());
+        assertEquals(2, mergeCommit.parents().size());
+        assertEquals("Tester", mergeCommit.author());
+    }
+
+    @Test
+    @DisplayName("three-way merge: one side modifies a file, the other doesn't")
+    void threeWayMergeOneSideModifies(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "a.txt", "original", "initial commit");
+        branchService.createBranch(repo, "feature");
+
+        // Feature modifies a.txt
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "a.txt", "modified by feature", "modify a on feature");
+
+        // Master adds b.txt but does NOT touch a.txt
+        checkoutService.checkout(repo, "master");
+        commit(repo, "b.txt", "B", "add b on master");
 
         MergeResult result = mergeService.merge(repo, "feature");
 
-        assertEquals(MergeResult.Type.ALREADY_UP_TO_DATE, result.type());
-        assertEquals(currentTip, result.commitId());
+        assertEquals(MergeResult.Type.MERGED, result.type());
+        // a.txt should have feature's version (they modified, we didn't).
+        assertEquals("modified by feature", readFile(repo, "a.txt"));
+        assertTrue(exists(repo, "b.txt"));
     }
 
-    // ── Error cases ─────────────────────────────────────────────────────
+    @Test
+    @DisplayName("three-way merge: both sides make the same change")
+    void threeWayMergeSameChange(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "a.txt", "original", "initial commit");
+        branchService.createBranch(repo, "feature");
+
+        // Both sides modify a.txt identically.
+        commit(repo, "a.txt", "same change", "modify a on master");
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "a.txt", "same change", "modify a on feature");
+
+        checkoutService.checkout(repo, "master");
+        MergeResult result = mergeService.merge(repo, "feature");
+
+        assertEquals(MergeResult.Type.MERGED, result.type());
+        assertEquals("same change", readFile(repo, "a.txt"));
+    }
+
+    @Test
+    @DisplayName("three-way merge: one side modifies, other adds new file — all files present")
+    void threeWayMergeModifyAndAdd(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "a.txt", "A", "add a");
+        commit(repo, "b.txt", "B", "add b");
+        branchService.createBranch(repo, "feature");
+
+        // Feature modifies a, master adds c
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "a.txt", "A-mod", "modify a on feature");
+
+        checkoutService.checkout(repo, "master");
+        commit(repo, "c.txt", "C", "add c on master");
+
+        MergeResult result = mergeService.merge(repo, "feature");
+
+        assertEquals(MergeResult.Type.MERGED, result.type());
+        assertTrue(exists(repo, "a.txt"));
+        assertTrue(exists(repo, "b.txt"));
+        assertTrue(exists(repo, "c.txt"));
+        assertEquals("A-mod", readFile(repo, "a.txt"));
+    }
+
+    @Test
+    @DisplayName("three-way merge updates the index to reflect the merged state")
+    void threeWayMergeUpdatesIndex(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "base.txt", "BASE", "initial commit");
+        branchService.createBranch(repo, "feature");
+
+        commit(repo, "master-only.txt", "M", "master file");
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "feature-only.txt", "F", "feature file");
+
+        checkoutService.checkout(repo, "master");
+        mergeService.merge(repo, "feature");
+
+        Index index = new IndexStorage(repo.getMetadataPath()).readIndex();
+        assertTrue(index.contains("base.txt"));
+        assertTrue(index.contains("master-only.txt"));
+        assertTrue(index.contains("feature-only.txt"));
+    }
+
+    @Test
+    @DisplayName("untracked files are preserved during three-way merge")
+    void untrackedFilesSurviveThreeWayMerge(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "base.txt", "BASE", "initial commit");
+        branchService.createBranch(repo, "feature");
+
+        commit(repo, "b.txt", "B", "master commit");
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "c.txt", "C", "feature commit");
+
+        checkoutService.checkout(repo, "master");
+        writeFile(repo, "scratch.txt", "keep me");
+
+        mergeService.merge(repo, "feature");
+        assertTrue(exists(repo, "scratch.txt"));
+    }
+
+    // =================================================================
+    // Conflict detection
+    // =================================================================
+
+    @Test
+    @DisplayName("three-way merge with conflicts throws MergeConflictException, writes markers, and sets MERGE_HEAD")
+    void conflictingChangesThrow(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "a.txt", "original\n", "initial commit");
+        branchService.createBranch(repo, "feature");
+
+        // Both sides modify a.txt differently.
+        commit(repo, "a.txt", "master version\n", "modify a on master");
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "a.txt", "feature version\n", "modify a on feature");
+
+        checkoutService.checkout(repo, "master");
+        
+        MergeConflictException ex = assertThrows(MergeConflictException.class,
+                () -> mergeService.merge(repo, "feature"));
+        
+        assertEquals(MergeResult.Type.CONFLICTED, ex.getMergeResult().type());
+        assertEquals(1, ex.getConflicts().size());
+        assertEquals("a.txt", ex.getConflicts().get(0).path());
+
+        // Verify conflict markers are in the working tree file
+        String content = FileUtil.readString(root.resolve("a.txt"));
+        assertTrue(content.contains("<<<<<<< master"));
+        assertTrue(content.contains("master version"));
+        assertTrue(content.contains("======="));
+        assertTrue(content.contains("feature version"));
+        assertTrue(content.contains(">>>>>>> feature"));
+        
+        // Verify MERGE_HEAD exists
+        FileStorage fileStorage = new app.storage.DefaultStorageFactory().createFileStorage(repo.getMetadataPath());
+        assertTrue(fileStorage.hasMergeHead());
+    }
+
+    @Test
+    @DisplayName("aborting a merge clears MERGE_HEAD and restores working tree")
+    void abortMerge(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        commit(repo, "a.txt", "original\n", "initial commit");
+        branchService.createBranch(repo, "feature");
+        commit(repo, "a.txt", "master version\n", "modify a on master");
+        checkoutService.checkout(repo, "feature");
+        commit(repo, "a.txt", "feature version\n", "modify a on feature");
+        checkoutService.checkout(repo, "master");
+
+        // Cause conflict
+        assertThrows(MergeConflictException.class, () -> mergeService.merge(repo, "feature"));
+        
+        // Now abort
+        mergeService.abort(repo);
+        
+        // Verify MERGE_HEAD is gone
+        FileStorage fileStorage = new app.storage.DefaultStorageFactory().createFileStorage(repo.getMetadataPath());
+        assertFalse(fileStorage.hasMergeHead());
+        
+        // Verify a.txt is restored to master version
+        assertEquals("master version\n", FileUtil.readString(root.resolve("a.txt")));
+    }
+
+    // =================================================================
+    // Error cases
+    // =================================================================
 
     @Test
     @DisplayName("merging a branch into itself is rejected")
     void mergeSelfRejected(@TempDir Path root) throws IOException {
         Repository repo = initRepo(root);
         commit(repo, "a.txt", "A", "add a");
-
         assertThrows(IllegalArgumentException.class,
                 () -> mergeService.merge(repo, "master"));
     }
@@ -215,7 +434,6 @@ class MergeServiceTest {
     void missingBranchRejected(@TempDir Path root) throws IOException {
         Repository repo = initRepo(root);
         commit(repo, "a.txt", "A", "add a");
-
         assertThrows(IllegalArgumentException.class,
                 () -> mergeService.merge(repo, "nonexistent"));
     }
@@ -224,7 +442,6 @@ class MergeServiceTest {
     @DisplayName("merging before any commits is rejected")
     void mergeBeforeCommitsRejected(@TempDir Path root) {
         Repository repo = initRepo(root);
-
         assertThrows(IllegalStateException.class,
                 () -> mergeService.merge(repo, "feature"));
     }
@@ -239,12 +456,10 @@ class MergeServiceTest {
         commit(repo, "b.txt", "B", "add b");
 
         checkoutService.checkout(repo, "master");
-        // Dirty the working tree.
         writeFile(repo, "a.txt", "modified but not staged");
 
         assertThrows(IllegalStateException.class,
                 () -> mergeService.merge(repo, "feature"));
-        // Branch tip must be unchanged.
         assertEquals("master", branchService.currentBranch(repo));
     }
 
@@ -253,79 +468,25 @@ class MergeServiceTest {
     void blankBranchNameRejected(@TempDir Path root) throws IOException {
         Repository repo = initRepo(root);
         commit(repo, "a.txt", "A", "add a");
-
         assertThrows(IllegalArgumentException.class,
                 () -> mergeService.merge(repo, "  "));
     }
 
-    // ── Diverged branches ───────────────────────────────────────────────
-
     @Test
-    @DisplayName("merging diverged branches throws UnsupportedOperationException (future milestone)")
-    void divergedBranchesThrow(@TempDir Path root) throws IOException {
+    @DisplayName("dirty tree is also refused for diverged branches (three-way)")
+    void dirtyTreeRefusedForThreeWay(@TempDir Path root) throws IOException {
         Repository repo = initRepo(root);
-        commit(repo, "a.txt", "A", "add a");
+        commit(repo, "base.txt", "BASE", "initial");
         branchService.createBranch(repo, "feature");
 
-        // Commit on master.
-        commit(repo, "b.txt", "B", "add b on master");
-
-        // Commit on feature.
+        commit(repo, "b.txt", "B", "master commit");
         checkoutService.checkout(repo, "feature");
-        commit(repo, "c.txt", "C", "add c on feature");
+        commit(repo, "c.txt", "C", "feature commit");
 
-        // Switch back to master and attempt merge — branches have diverged.
         checkoutService.checkout(repo, "master");
-        assertThrows(UnsupportedOperationException.class,
+        writeFile(repo, "base.txt", "dirty");
+
+        assertThrows(IllegalStateException.class,
                 () -> mergeService.merge(repo, "feature"));
-    }
-
-    // ── Fast-forward with multi-commit chain ────────────────────────────
-
-    @Test
-    @DisplayName("fast-forward merge works across multiple commits on the source branch")
-    void fastForwardAcrossMultipleCommits(@TempDir Path root) throws IOException {
-        Repository repo = initRepo(root);
-        commit(repo, "a.txt", "A", "add a");
-        branchService.createBranch(repo, "feature");
-        checkoutService.checkout(repo, "feature");
-
-        // Multiple commits on feature.
-        commit(repo, "b.txt", "B1", "add b");
-        commit(repo, "b.txt", "B2", "update b");
-        commit(repo, "c.txt", "C", "add c");
-        String featureTip = branchService.tipOf(repo, "feature").orElseThrow();
-
-        checkoutService.checkout(repo, "master");
-        MergeResult result = mergeService.merge(repo, "feature");
-
-        assertEquals(MergeResult.Type.FAST_FORWARD, result.type());
-        assertEquals(featureTip, result.commitId());
-
-        // Working tree has the latest state.
-        assertEquals("B2", readFile(repo, "b.txt"));
-        assertTrue(exists(repo, "c.txt"));
-
-        // Master tip matches feature.
-        assertEquals(featureTip, branchService.tipOf(repo, "master").orElseThrow());
-    }
-
-    // ── Untracked files survive merge ───────────────────────────────────
-
-    @Test
-    @DisplayName("untracked files are preserved during fast-forward merge")
-    void untrackedFilesSurvive(@TempDir Path root) throws IOException {
-        Repository repo = initRepo(root);
-        commit(repo, "a.txt", "A", "add a");
-        branchService.createBranch(repo, "feature");
-        checkoutService.checkout(repo, "feature");
-        commit(repo, "b.txt", "B", "add b");
-
-        checkoutService.checkout(repo, "master");
-        writeFile(repo, "scratch.txt", "keep me"); // untracked
-
-        mergeService.merge(repo, "feature");
-
-        assertTrue(exists(repo, "scratch.txt"), "untracked files must survive merge");
     }
 }

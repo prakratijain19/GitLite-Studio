@@ -12,24 +12,13 @@ import app.model.Index;
 import app.model.Repository;
 import app.storage.CommitStorage;
 import app.storage.DefaultStorageFactory;
+import app.storage.FileStorage;
 import app.storage.IndexStorage;
 import app.storage.StorageException;
 import app.storage.StorageFactory;
 
 /**
  * Creates commits — freezing the staging index into permanent history.
- *
- * <p>Committing resolves the current branch and its tip (the parent), snapshots
- * the staged index, writes the commit object, and advances the branch tip — which
- * births a previously unborn branch on its first commit. The staging index is
- * left untouched afterwards, so it continues to mirror the new commit.
- *
- * <p>The service owns commit <em>policy</em> and delegates disk work to the
- * storage layer. It is application-scoped and receives a {@link Repository} per
- * call. Its collaborators are injected: a {@link HashService} for commit
- * identity, a {@link StorageFactory} for repository-scoped storage, and a
- * {@link Clock} so that commit timestamps — and therefore the content-addressed
- * commit ids that depend on them — are deterministic under test.
  */
 public final class CommitService {
 
@@ -40,19 +29,10 @@ public final class CommitService {
     private final BranchService branchService;
     private final Clock clock;
 
-    /** Creates a service wired with default collaborators and the system UTC clock. */
     public CommitService() {
         this(new DefaultStorageFactory(), new HashService(), Clock.systemUTC());
     }
 
-    /**
-     * Creates a service with explicit collaborators. Intended for tests, which may
-     * supply a fixed {@link Clock} for deterministic commit ids.
-     *
-     * @param storageFactory the factory used to obtain repository-scoped storage.
-     * @param hashService    the service used to compute commit ids.
-     * @param clock          the clock used to timestamp commits.
-     */
     public CommitService(StorageFactory storageFactory, HashService hashService, Clock clock) {
         this.storageFactory = Objects.requireNonNull(storageFactory, "storageFactory must not be null");
         this.hashService = Objects.requireNonNull(hashService, "hashService must not be null");
@@ -61,15 +41,7 @@ public final class CommitService {
     }
 
     /**
-     * Commits the current staging index on the branch that {@code HEAD} points at.
-     *
-     * @param repository the repository to commit in.
-     * @param message    the commit message (non-blank).
-     * @return the created {@link Commit}.
-     * @throws IllegalArgumentException   if the message is null or blank.
-     * @throws NothingToCommitException   if the index is empty or unchanged from
-     *                                    the current branch tip.
-     * @throws StorageException           if repository data cannot be read or written.
+     * Commits the current staging index on the branch that HEAD points at.
      */
     public Commit commit(Repository repository, String message) {
         Objects.requireNonNull(repository, "repository must not be null");
@@ -87,16 +59,25 @@ public final class CommitService {
         }
         List<FileSnapshot> manifest = index.getSnapshots();
 
+        FileStorage fileStorage = storageFactory.createFileStorage(repository.getMetadataPath());
+        String secondParentId = fileStorage.readMergeHead().orElse(null);
         CommitStorage commitStorage = storageFactory.createCommitStorage(repository.getMetadataPath());
-        if (parentId != null && isUnchanged(commitStorage, parentId, manifest)) {
-            throw new NothingToCommitException(
-                    "Nothing to commit: no changes since the last commit");
+
+        if (secondParentId == null) {
+            if (parentId != null && isUnchanged(commitStorage, parentId, manifest)) {
+                throw new NothingToCommitException(
+                        "Nothing to commit: no changes since the last commit");
+            }
+        } else {
+            Commit commit = mergeCommit(repository, message, parentId, secondParentId, manifest);
+            fileStorage.deleteMergeHead();
+            return commit;
         }
 
         Instant timestamp = Instant.now(clock);
         String author = repository.getUserName();
-        String id = hashService.createCommitId(message, author, timestamp, parentId, manifest);
-        Commit commit = new Commit(id, message, author, timestamp, parentId, manifest);
+        String id = hashService.createCommitId(message, author, timestamp, parentId, null, manifest);
+        Commit commit = new Commit(id, message, author, timestamp, parentId, null, manifest);
 
         commitStorage.writeCommit(commit);
         branchService.advanceTip(repository, branch, id);
@@ -107,9 +88,37 @@ public final class CommitService {
     }
 
     /**
-     * @return {@code true} if the staged manifest is identical to the parent
-     *         commit's manifest, meaning there is nothing new to commit.
+     * Creates a merge commit with two parents and writes it to the repository.
      */
+    public Commit mergeCommit(Repository repository, String message,
+                              String parentId, String secondParentId,
+                              List<FileSnapshot> manifest) {
+        Objects.requireNonNull(repository, "repository must not be null");
+        if (message == null || message.isBlank()) {
+            throw new IllegalArgumentException("commit message must not be null or blank");
+        }
+        Objects.requireNonNull(parentId, "parentId must not be null");
+        Objects.requireNonNull(secondParentId, "secondParentId must not be null");
+        Objects.requireNonNull(manifest, "manifest must not be null");
+
+        String branch = branchService.currentBranch(repository);
+        Instant timestamp = Instant.now(clock);
+        String author = repository.getUserName();
+        String id = hashService.createCommitId(message, author, timestamp,
+                parentId, secondParentId, manifest);
+        Commit commit = new Commit(id, message, author, timestamp,
+                parentId, secondParentId, manifest);
+
+        CommitStorage commitStorage = storageFactory.createCommitStorage(repository.getMetadataPath());
+        commitStorage.writeCommit(commit);
+        branchService.advanceTip(repository, branch, id);
+
+        LOGGER.info(() -> "Merge commit " + id + " on branch '" + branch + "' ("
+                + manifest.size() + " file(s), parents: " + parentId.substring(0, 7)
+                + " + " + secondParentId.substring(0, 7) + ")");
+        return commit;
+    }
+
     private static boolean isUnchanged(CommitStorage commitStorage, String parentId,
                                        List<FileSnapshot> manifest) {
         Commit parent = commitStorage.readCommit(parentId).orElseThrow(() ->

@@ -37,6 +37,8 @@ public final class FileStorage {
     public static final String INDEX_FILE = "index";
     /** The HEAD pointer file. */
     public static final String HEAD_FILE = "HEAD";
+    /** The merge tip pointer file. */
+    public static final String MERGE_HEAD_FILE = "MERGE_HEAD";
 
     private final Path metadataDir;
 
@@ -120,6 +122,56 @@ public final class FileStorage {
             return FileUtil.readString(head);
         } catch (IOException e) {
             throw new StorageException("Failed to read HEAD at " + head, e);
+        }
+    }
+
+    /**
+     * Writes the given commit id to {@code MERGE_HEAD}, indicating a merge is
+     * in progress.
+     */
+    public void writeMergeHead(String commitId) {
+        Path mergeHead = metadataDir.resolve(MERGE_HEAD_FILE);
+        try {
+            FileUtil.writeString(mergeHead, commitId);
+        } catch (IOException e) {
+            throw new StorageException("Failed to write MERGE_HEAD at " + mergeHead, e);
+        }
+    }
+
+    /**
+     * Reads the commit id from {@code MERGE_HEAD}.
+     */
+    public Optional<String> readMergeHead() {
+        Path mergeHead = metadataDir.resolve(MERGE_HEAD_FILE);
+        if (!FileUtil.exists(mergeHead)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(FileUtil.readString(mergeHead).strip());
+        } catch (IOException e) {
+            throw new StorageException("Failed to read MERGE_HEAD at " + mergeHead, e);
+        }
+    }
+
+    /**
+     * @return {@code true} if {@code MERGE_HEAD} exists.
+     */
+    public boolean hasMergeHead() {
+        return FileUtil.exists(metadataDir.resolve(MERGE_HEAD_FILE));
+    }
+
+    /**
+     * Deletes {@code MERGE_HEAD} to exit the merge state.
+     */
+    public void deleteMergeHead() {
+        Path mergeHead = metadataDir.resolve(MERGE_HEAD_FILE);
+        if (!FileUtil.exists(mergeHead)) {
+            return;
+        }
+        try {
+            FileUtil.delete(mergeHead);
+        } catch (IOException e) {
+            throw new StorageException("Failed to delete MERGE_HEAD at " + mergeHead, e);
         }
     }
 

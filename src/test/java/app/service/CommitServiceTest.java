@@ -116,4 +116,28 @@ class CommitServiceTest {
         stageFile(repo, "a.txt", "one");
         assertThrows(IllegalArgumentException.class, () -> commitService.commit(repo, "  "));
     }
+
+    @Test
+    @DisplayName("commit() with MERGE_HEAD present creates a merge commit and clears MERGE_HEAD")
+    void mergeHeadCreatesMergeCommit(@TempDir Path root) throws IOException {
+        Repository repo = initRepo(root);
+        stageFile(repo, "a.txt", "one");
+        Commit parent = commitService.commit(repo, "first");
+
+        // Simulate a merge in progress
+        app.storage.FileStorage fileStorage = new DefaultStorageFactory().createFileStorage(repo.getMetadataPath());
+        fileStorage.writeMergeHead("secondParent123");
+
+        // We stage the resolved file. Even if it's identical to the parent,
+        // it shouldn't be rejected because it's a merge commit.
+        stageFile(repo, "a.txt", "one");
+        Commit mergeCommit = commitService.commit(repo, "Merge branch 'feature'");
+
+        assertTrue(mergeCommit.isMerge());
+        assertEquals(Optional.of(parent.id()), mergeCommit.parent());
+        assertEquals("secondParent123", mergeCommit.parents().get(1));
+        
+        // Ensure MERGE_HEAD was deleted
+        assertFalse(fileStorage.hasMergeHead());
+    }
 }
