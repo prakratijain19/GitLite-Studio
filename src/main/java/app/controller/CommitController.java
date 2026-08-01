@@ -1,6 +1,7 @@
 package app.controller;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.TreeSet;
 
@@ -26,11 +27,27 @@ import javafx.scene.control.TextArea;
  * {@link Repository} to operate on is supplied by the opener via
  * {@link #setRepository(Repository)}.
  *
- * <p>Only files that exist on disk (untracked files and unstaged modifications)
- * are offered for staging, since the current staging API reads file content;
- * staging a deletion is not yet supported.
+ * <p>Untracked files, unstaged modifications, and unstaged deletions are all
+ * offered for staging. Deletions are staged differently from the other two —
+ * {@link StagingService#stageDeletion} removes the index entry instead of
+ * reading file content, since a deleted file has none — so each row in the
+ * Changes list carries its {@link ChangeType} alongside its path via
+ * {@link ChangeEntry}, rather than a bare path string, so {@link #onStage()}
+ * knows which staging operation applies.
  */
 public final class CommitController {
+
+    /**
+     * A single row in the Changes list: a path plus the change it represents.
+     * {@code type} is {@code null} for untracked files, which have no
+     * {@link ChangeType} of their own in {@link StatusReport}.
+     */
+    private record ChangeEntry(String path, ChangeType type) {
+        @Override
+        public String toString() {
+            return type == ChangeType.DELETED ? "DELETE " + path : path;
+        }
+    }
 
     private final StagingService stagingService = new StagingService();
     private final CommitService commitService = new CommitService();
@@ -39,7 +56,7 @@ public final class CommitController {
     private Repository repository;
 
     @FXML
-    private ListView<String> unstagedList;
+    private ListView<ChangeEntry> unstagedList;
     @FXML
     private ListView<String> stagedList;
     @FXML
@@ -65,10 +82,14 @@ public final class CommitController {
         if (repository == null) {
             return;
         }
-        List<String> selected = new ArrayList<>(unstagedList.getSelectionModel().getSelectedItems());
+        List<ChangeEntry> selected = new ArrayList<>(unstagedList.getSelectionModel().getSelectedItems());
         try {
-            for (String path : selected) {
-                stagingService.stage(repository, repository.getRootPath().resolve(path));
+            for (ChangeEntry entry : selected) {
+                if (entry.type() == ChangeType.DELETED) {
+                    stagingService.stageDeletion(repository, entry.path());
+                } else {
+                    stagingService.stage(repository, repository.getRootPath().resolve(entry.path()));
+                }
             }
             refresh();
         } catch (RuntimeException e) {
@@ -104,16 +125,22 @@ public final class CommitController {
         }
         StatusReport status = statusService.status(repository);
 
-        List<String> stageable = new ArrayList<>(status.untracked());
+        List<ChangeEntry> stageable = new ArrayList<>();
+        status.untracked().forEach(path -> stageable.add(new ChangeEntry(path, null)));
         status.unstagedChanges().forEach((path, type) -> {
-            if (type == ChangeType.MODIFIED) {
-                stageable.add(path);
+            if (type == ChangeType.MODIFIED || type == ChangeType.DELETED) {
+                stageable.add(new ChangeEntry(path, type));
             }
         });
-        stageable.sort(String::compareTo);
+        stageable.sort(Comparator.comparing(ChangeEntry::path));
         unstagedList.getItems().setAll(stageable);
 
-        stagedList.getItems().setAll(new TreeSet<>(status.stagedChanges().keySet()));
+        List<String> staged = new ArrayList<>();
+        new TreeSet<>(status.stagedChanges().keySet()).forEach(path -> {
+            ChangeType type = status.stagedChanges().get(path);
+            staged.add(type == ChangeType.DELETED ? "DELETE " + path : path);
+        });
+        stagedList.getItems().setAll(staged);
     }
 
     private void showError(String header, String message) {

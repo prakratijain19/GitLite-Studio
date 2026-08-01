@@ -101,6 +101,37 @@ public final class StagingService {
     }
 
     /**
+     * Stages the deletion of a tracked file: removes its entry from the index so
+     * the next commit's manifest omits it, without creating a blob.
+     *
+     * <p>This is the deletion counterpart to {@link #stage(Repository, Path)}.
+     * That method requires the file to exist because it reads content to hash;
+     * a deleted file has no content, so its staging operation is instead "stop
+     * tracking this path" rather than "record this path's content."
+     *
+     * @param repository   the repository whose index is updated.
+     * @param relativePath the repository-relative path of the tracked file that
+     *                     was deleted from the working tree.
+     * @return {@code true} if an index entry was removed, {@code false} if the
+     *         path was not tracked in the index.
+     */
+    public boolean stageDeletion(Repository repository, String relativePath) {
+        Objects.requireNonNull(repository, "repository must not be null");
+        Objects.requireNonNull(relativePath, "relativePath must not be null");
+
+        Path metadataDir = repository.getMetadataPath();
+        IndexStorage indexStorage = storageFactory.createIndexStorage(metadataDir);
+        Index index = indexStorage.readIndex();
+
+        boolean removed = index.unstage(relativePath);
+        if (removed) {
+            indexStorage.writeIndex(index);
+            LOGGER.info(() -> "Staged deletion of " + relativePath);
+        }
+        return removed;
+    }
+
+    /**
      * Computes the repository-root-relative path of a working-tree file, rejecting
      * files that escape the repository or live inside its metadata directory.
      */

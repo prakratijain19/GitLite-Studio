@@ -26,17 +26,21 @@ import app.util.FileUtil;
  * Switches the repository onto another branch — the equivalent of
  * {@code git switch} / {@code git checkout <branch>}.
  *
- * <p>Switching rewrites the working tree, index, and {@code HEAD} to match the
+ * <p>
+ * Switching rewrites the working tree, index, and {@code HEAD} to match the
  * target branch's tip commit: files tracked now but absent from the target are
  * deleted, the target's files are written from their blobs, the index is set to
  * the target snapshot, and {@code HEAD} is pointed at the branch.
  *
- * <p>This is the first operation that writes user files, so it is deliberately
+ * <p>
+ * This is the first operation that writes user files, so it is deliberately
  * safe: it <strong>refuses</strong> if the working tree has staged or unstaged
- * changes, rather than overwriting them. Untracked files are left untouched. Only
+ * changes, rather than overwriting them. Untracked files are left untouched.
+ * Only
  * branch targets are supported; detached HEAD is a future capability.
  *
- * <p>It is application-scoped and injected with a {@link StorageFactory} and
+ * <p>
+ * It is application-scoped and injected with a {@link StorageFactory} and
  * {@link HashService}, from which it builds a {@link StatusService} (for the
  * dirty check) and a {@link BranchService} (to resolve the tip and move HEAD).
  */
@@ -71,7 +75,8 @@ public final class CheckoutService {
      * @param repository the repository to switch.
      * @param branchName the branch to switch to; must exist and have a commit.
      * @return the branch now checked out.
-     * @throws IllegalArgumentException if the branch does not exist or has no commit.
+     * @throws IllegalArgumentException if the branch does not exist or has no
+     *                                  commit.
      * @throws IllegalStateException    if the working tree has uncommitted changes.
      * @throws StorageException         if repository data or the working tree
      *                                  cannot be read or written.
@@ -82,8 +87,8 @@ public final class CheckoutService {
             throw new IllegalArgumentException("branch name must not be null or blank");
         }
 
-        String targetTip = branchService.tipOf(repository, branchName).orElseThrow(() ->
-                new IllegalArgumentException("Cannot switch to branch (missing or no commits): " + branchName));
+        String targetTip = branchService.tipOf(repository, branchName).orElseThrow(
+                () -> new IllegalArgumentException("Cannot switch to branch (missing or no commits): " + branchName));
 
         StatusReport status = statusService.status(repository);
         if (!status.stagedChanges().isEmpty() || !status.unstagedChanges().isEmpty()) {
